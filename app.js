@@ -1,5 +1,5 @@
 var camera, controls, scene, renderer, scene2, camera2;
-var pointsObject, planeObject, linesObject, axisGroup;
+var pointsObject, planeObject, linesObject, axisGroup, lutInputGroup;
 var lutSympa = 1.0;
 var lutData, lutType;
 
@@ -7,6 +7,7 @@ var guiData = new function() {
   this.pointSize = 2;
   this.lineWidth = 1;
   this.showAxis = true;
+  this.showLutInput = false;
   this.sliderSympa = 1.0;
 }
 
@@ -119,9 +120,6 @@ function initPointCloudLutCube(cube) {
 			for (var i = 0; i < size; ++i ) {
 				var maxi = Math.max(Math.max(i, j), k);
 				var mini = Math.min(Math.min(i, j), k);
-				//if (Math.abs(maxi - lutSympa * (size - 1)) <= 1 || Math.abs(mini - (1 - lutSympa) * (size - 1)) <= 1) {
-				//if (Math.abs(maxi - (size - 1)) < 1 || Math.abs(mini - 0) < 1) {
-				//if (Math.abs(maxi - lutSympa * (size - 1)) < 1 || Math.abs(mini - (1 - lutSympa) * (size - 1)) < 1) {
 				var th = Math.round((1-lutSympa) * size / 2);
 				if ((maxi == size - 1 - th && mini > th) || (mini == th && maxi < size - 1 - th))
 				{
@@ -185,6 +183,19 @@ function initPointCloudLut(data, type) {
 		geoData.positions[i] = (geoData.positions[i] - 0.5) * 256;
 	}
 
+	{
+		var positions = new Float32Array(geoData.positions.length);
+		for (var i = 0 ; i < geoData.positions.length ; ++i) {
+			positions[i] = (geoData.colors[i] - 0.5) * 256;
+		}
+		var geometry = new THREE.BufferGeometry();
+		geometry.setAttribute( 'position', new THREE.Float32BufferAttribute( positions, 3 ) );
+		var material = new THREE.PointsMaterial( { size: guiData.pointSize, color: 0x88888888, transparent: true, opacity: 0.3, } );
+		geometry.computeBoundingSphere();
+		var lutInputPoints = new THREE.Points( geometry, material );
+		lutInputGroup.add( lutInputPoints );
+	}
+
 	var geometry = new THREE.BufferGeometry();
 	geometry.setAttribute( 'position', new THREE.Float32BufferAttribute( geoData.positions, 3 ) );
 	geometry.setAttribute( 'color', new THREE.Float32BufferAttribute( geoData.colors, 3 ) );
@@ -205,7 +216,7 @@ function initLineCloudLut(data, type) {
 		geoData = initPointCloudLutPlan(data);
 	}
 
-	var subsample = 100;
+	var subsample = 20;
 	var pointCount = geoData.positions.length / 3 / subsample;
 	var lines = new Float32Array(6 * pointCount);
 	var lineColors = new Float32Array(6 * pointCount);
@@ -257,7 +268,13 @@ function rebuildScene(texture) {
 	}
 }
 
-function rebuildSceneLut(data, type) {
+function rebuildSceneLut(data, type) {	
+	{
+		scene.remove(lutInputGroup);
+		lutInputGroup = new THREE.Group();
+		scene.add(lutInputGroup);
+	}
+
 	{
 		if (linesObject !== undefined) {
 			scene.remove(linesObject);
@@ -368,6 +385,9 @@ function init() {
 	}
 	scene.add(axisGroup);
 
+	lutInputGroup = new THREE.Group();
+	scene.add(lutInputGroup);
+
 	// controls
 
 	controls = new OrbitControls( camera, renderer.domElement );
@@ -411,6 +431,7 @@ function init() {
 	gui.add(guiData, 'pointSize', 1, 10);
 	gui.add(guiData, 'lineWidth', 1, 10);
 	gui.add(guiData, 'showAxis');
+	gui.add(guiData, 'showLutInput');
 	gui.add(guiData, 'sliderSympa', 0.0, 1.0);
 
 	//
@@ -487,6 +508,7 @@ function animate() {
 	}
 
 	axisGroup.visible = guiData.showAxis;
+	lutInputGroup.visible = guiData.showLutInput;
 
 	setLutSympa(guiData.sliderSympa);
 
