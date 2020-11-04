@@ -1,8 +1,9 @@
 var camera, controls, scene, renderer, scene2, camera2;
-var pointsObject, planeObject, axisGroup;
+var pointsObject, planeObject, linesObject, axisGroup;
 
 var guiData = new function() {
   this.pointSize = 2;
+  this.lineWidth = 1;
   this.showAxis = true;
 }
 
@@ -80,7 +81,7 @@ function initPointCloud(image) {
 	return geometry;
 }
 
-function initPointCloudLut(cube) {
+function initPointCloudLutCube(cube) {
 	var rawLines = cube.split("\n");
 	var lines = [];
 	var l;
@@ -104,58 +105,124 @@ function initPointCloudLut(cube) {
 		return;
 	}
 
-	console.log("size = " + size);
 	var particleCount = 6 * size * size - 12 * size - 8;
+	var positions = new Float32Array(3 * particleCount);
+	var colors = new Float32Array(3 * particleCount);
 
-	var geometry = new THREE.BufferGeometry();
-
-	var positions = [];
-	var colors = [];
-
-	var color = new THREE.Color();
-
-	var x, y, z;
-	var r, g, b;
+	var u = 0;
 	for (var k = 0; k < size; ++k ) {
 		for (var j = 0; j < size; ++j ) {
 			for (var i = 0; i < size; ++i ) {
 				var maxi = Math.max(Math.max(i, j), k);
 				var mini = Math.min(Math.min(i, j), k);
 				if (maxi == size - 1 || mini == 0) {
-					/*
-					x = (i / (size - 1) - 0.5) * 256;
-					y = (j / (size - 1) - 0.5) * 256;
-					z = (k / (size - 1) - 0.5) * 256;
+					colors[3 * u + 0] = i / (size - 1);
+					colors[3 * u + 1] = j / (size - 1);
+					colors[3 * u + 2] = k / (size - 1);
 					tokens = lines[c].split(" ");
-					r = parseFloat(tokens[0]);
-					g = parseFloat(tokens[1]);
-					b = parseFloat(tokens[2]);
-					*/
-					r = i / (size - 1);
-					g = j / (size - 1);
-					b = k / (size - 1);
-					tokens = lines[c].split(" ");
-					z = (parseFloat(tokens[0]) - 0.5) * 256;
-					y = (parseFloat(tokens[1]) - 0.5) * 256;
-					x = (parseFloat(tokens[2]) - 0.5) * 256;
-					
-					positions.push(x, y, z);
-					colors.push(r, g, b);
+					positions[3 * u + 0] = parseFloat(tokens[0]);
+					positions[3 * u + 1] = parseFloat(tokens[1]);
+					positions[3 * u + 2] = parseFloat(tokens[2]);
+					++u;
 				}
 				++c;
 			}
 		}
 	}
 
-	geometry.setAttribute( 'position', new THREE.Float32BufferAttribute( positions, 3 ) );
-	geometry.setAttribute( 'color', new THREE.Float32BufferAttribute( colors, 3 ) );
+	return {
+		positions: positions,
+		colors: colors,
+	}
+}
 
+function initPointCloudLutPlan(plan) {
+	var pointCount = new Uint32Array(plan, 0, 1);
+	var pointData = new Float64Array(plan.slice(4));
+
+	var positions = new Float32Array(3 * pointCount);
+	var colors = new Float32Array(3 * pointCount);
+
+	var x, y, z;
+	var r, g, b;
+	for (var i = 0; i < pointCount; ++i ) {
+		colors[3 * i + 0] = pointData[6 * i + 0];
+		colors[3 * i + 1] = pointData[6 * i + 1];
+		colors[3 * i + 2] = pointData[6 * i + 2];
+		positions[3 * i + 0] = pointData[6 * i + 3];
+		positions[3 * i + 1] = pointData[6 * i + 4];
+		positions[3 * i + 2] = pointData[6 * i + 5];
+	}
+
+	return {
+		positions: positions,
+		colors: colors,
+	}
+}
+
+function initPointCloudLut(data, type) {
+	var geoData = {
+		positions: [],
+		colors: [],
+	};
+
+	if (type == 'CUBE') {
+		geoData = initPointCloudLutCube(data);
+	} else if (type == 'PLAN') {
+		geoData = initPointCloudLutPlan(data);
+	}
+
+	for (var i = 0 ; i < geoData.positions.length ; ++i) {
+		geoData.positions[i] = (geoData.positions[i] - 0.5) * 256;
+	}
+
+	var geometry = new THREE.BufferGeometry();
+	geometry.setAttribute( 'position', new THREE.Float32BufferAttribute( geoData.positions, 3 ) );
+	geometry.setAttribute( 'color', new THREE.Float32BufferAttribute( geoData.colors, 3 ) );
 	geometry.computeBoundingSphere();
+	var material = new THREE.PointsMaterial( { size: guiData.pointSize, vertexColors: true } );
+	return new THREE.Points( geometry, material );
+}
 
-	return geometry;
+function initLineCloudLut(data, type) {
+	var geoData = {
+		positions: [],
+		colors: [],
+	};
+
+	if (type == 'CUBE') {
+		geoData = initPointCloudLutCube(data);
+	} else if (type == 'PLAN') {
+		geoData = initPointCloudLutPlan(data);
+	}
+
+	var subsample = 100;
+	var pointCount = geoData.positions.length / 3 / subsample;
+	var lines = new Float32Array(6 * pointCount);
+	var lineColors = new Float32Array(6 * pointCount);
+	for (var i = 0 ; i < pointCount ; ++i) {
+		for (var k = 0 ; k < 3 ; ++k) {
+			var pos = geoData.positions[3 * i * subsample + k];
+			var col = geoData.colors[3 * i * subsample + k];
+			lines[6 * i + 0 + k] = (pos - 0.5) * 256;
+			lines[6 * i + 3 + k] = (col - 0.5) * 256;
+			lineColors[6 * i + 0 + k] = pos;
+			lineColors[6 * i + 3 + k] = col;
+		}
+	}
+
+	var geometry = new THREE.BufferGeometry();
+	geometry.setAttribute( 'position', new THREE.Float32BufferAttribute( lines, 3 ) );
+	geometry.setAttribute( 'color', new THREE.Float32BufferAttribute( lineColors, 3 ) );
+	geometry.computeBoundingSphere();
+	var material = new THREE.LineBasicMaterial( { linewidth: guiData.lineWidth, vertexColors: THREE.VertexColors } );
+	return new THREE.LineSegments( geometry, material );
 }
 
 function rebuildScene(texture) {
+	if (linesObject !== undefined) {
+		scene.remove(linesObject);
+	}
 	{
 		if (pointsObject !== undefined) {
 			scene.remove(pointsObject);
@@ -181,14 +248,20 @@ function rebuildScene(texture) {
 	}
 }
 
-function rebuildSceneLut(cube) {
+function rebuildSceneLut(cube, type) {
+	{
+		if (linesObject !== undefined) {
+			scene.remove(linesObject);
+		}
+		linesObject = initLineCloudLut(cube, type);
+		scene.add( linesObject );
+	}
+
 	{
 		if (pointsObject !== undefined) {
 			scene.remove(pointsObject);
 		}
-		var geometry = initPointCloudLut(cube);
-		var material = new THREE.PointsMaterial( { size: guiData.pointSize, vertexColors: true } );
-		pointsObject = new THREE.Points( geometry, material );
+		pointsObject = initPointCloudLut(cube, type);
 		scene.add( pointsObject );
 	}
 
@@ -318,6 +391,7 @@ function init() {
 
 	var gui = new dat.GUI();
 	gui.add(guiData, 'pointSize', 1, 10);
+	gui.add(guiData, 'lineWidth', 1, 10);
 	gui.add(guiData, 'showAxis');
 
 	//
@@ -333,10 +407,18 @@ Handlers.prototype.userFileChanged = function(userFile) {
 		var reader = new FileReader();
 
 		reader.onload = function(e) {
-			rebuildSceneLut(e.target.result);
+			rebuildSceneLut(e.target.result, 'CUBE');
 		}
 
 		reader.readAsText(filename);
+	} else if (filename.name.toLowerCase().endsWith(".plan")) {
+		var reader = new FileReader();
+
+		reader.onload = function(e) {
+			rebuildSceneLut(e.target.result, 'PLAN');
+		}
+
+		reader.readAsArrayBuffer(filename);
 	} else {
 		var reader = new FileReader();
 
@@ -377,6 +459,12 @@ function animate() {
 		var material = pointsObject.material;
 		material.needsUpdate = material.size != guiData.pointSize;
 		material.size = guiData.pointSize;
+	}
+
+	if (linesObject !== undefined) {
+		var material = linesObject.material;
+		material.needsUpdate = material.linewidth != guiData.lineWidth;
+		material.linewidth = guiData.lineWidth;
 	}
 
 	axisGroup.visible = guiData.showAxis;
