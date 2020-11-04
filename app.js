@@ -1,10 +1,13 @@
 var camera, controls, scene, renderer, scene2, camera2;
 var pointsObject, planeObject, linesObject, axisGroup;
+var lutSympa = 1.0;
+var lutData, lutType;
 
 var guiData = new function() {
   this.pointSize = 2;
   this.lineWidth = 1;
   this.showAxis = true;
+  this.sliderSympa = 1.0;
 }
 
 init();
@@ -106,6 +109,7 @@ function initPointCloudLutCube(cube) {
 	}
 
 	var particleCount = 6 * size * size - 12 * size - 8;
+	particleCount = size * size * size;
 	var positions = new Float32Array(3 * particleCount);
 	var colors = new Float32Array(3 * particleCount);
 
@@ -115,7 +119,12 @@ function initPointCloudLutCube(cube) {
 			for (var i = 0; i < size; ++i ) {
 				var maxi = Math.max(Math.max(i, j), k);
 				var mini = Math.min(Math.min(i, j), k);
-				if (maxi == size - 1 || mini == 0) {
+				//if (Math.abs(maxi - lutSympa * (size - 1)) <= 1 || Math.abs(mini - (1 - lutSympa) * (size - 1)) <= 1) {
+				//if (Math.abs(maxi - (size - 1)) < 1 || Math.abs(mini - 0) < 1) {
+				//if (Math.abs(maxi - lutSympa * (size - 1)) < 1 || Math.abs(mini - (1 - lutSympa) * (size - 1)) < 1) {
+				var th = Math.round((1-lutSympa) * size / 2);
+				if ((maxi == size - 1 - th && mini > th) || (mini == th && maxi < size - 1 - th))
+				{
 					colors[3 * u + 0] = i / (size - 1);
 					colors[3 * u + 1] = j / (size - 1);
 					colors[3 * u + 2] = k / (size - 1);
@@ -131,8 +140,8 @@ function initPointCloudLutCube(cube) {
 	}
 
 	return {
-		positions: positions,
-		colors: colors,
+		positions: positions.slice(0, 3 * u),
+		colors: colors.slice(0, 3 * u),
 	}
 }
 
@@ -191,7 +200,7 @@ function initLineCloudLut(data, type) {
 	};
 
 	if (type == 'CUBE') {
-		geoData = initPointCloudLutCube(data);
+		//geoData = initPointCloudLutCube(data);
 	} else if (type == 'PLAN') {
 		geoData = initPointCloudLutPlan(data);
 	}
@@ -248,12 +257,12 @@ function rebuildScene(texture) {
 	}
 }
 
-function rebuildSceneLut(cube, type) {
+function rebuildSceneLut(data, type) {
 	{
 		if (linesObject !== undefined) {
 			scene.remove(linesObject);
 		}
-		linesObject = initLineCloudLut(cube, type);
+		linesObject = initLineCloudLut(data, type);
 		scene.add( linesObject );
 	}
 
@@ -261,7 +270,7 @@ function rebuildSceneLut(cube, type) {
 		if (pointsObject !== undefined) {
 			scene.remove(pointsObject);
 		}
-		pointsObject = initPointCloudLut(cube, type);
+		pointsObject = initPointCloudLut(data, type);
 		scene.add( pointsObject );
 	}
 
@@ -270,6 +279,15 @@ function rebuildSceneLut(cube, type) {
 			scene2.remove(planeObject);
 		}
 	}
+
+	lutData = data;
+	lutType = type;
+}
+
+function setLutSympa(newLutSympa) {
+	if (lutSympa == newLutSympa) return;
+	lutSympa = newLutSympa;
+	rebuildSceneLut(lutData, lutType);
 }
 
 function init() {
@@ -393,6 +411,7 @@ function init() {
 	gui.add(guiData, 'pointSize', 1, 10);
 	gui.add(guiData, 'lineWidth', 1, 10);
 	gui.add(guiData, 'showAxis');
+	gui.add(guiData, 'sliderSympa', 0.0, 1.0);
 
 	//
 
@@ -468,6 +487,8 @@ function animate() {
 	}
 
 	axisGroup.visible = guiData.showAxis;
+
+	setLutSympa(guiData.sliderSympa);
 
 	render();
 
