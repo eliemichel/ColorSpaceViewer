@@ -2,6 +2,9 @@ var camera, controls, scene, renderer, scene2, camera2;
 var pointsObject, planeObject, linesObject, axisGroup, lutInputGroup;
 var lutSympa = 1.0;
 var lutData, lutType;
+var animationCallbacks = [];
+var previousCamera = null;
+var mayStopDrawing = true;
 
 var guiData = new function() {
   this.pointSize = 2;
@@ -9,6 +12,7 @@ var guiData = new function() {
   this.showAxis = true;
   this.showLutInput = false;
   this.sliderSympa = 1.0;
+  this.autostopDrawing = true;
 }
 
 init();
@@ -140,6 +144,8 @@ function initPointCloudLutCube(cube) {
 	return {
 		positions: positions.slice(0, 3 * u),
 		colors: colors.slice(0, 3 * u),
+		frameCount: 1,
+		size: [0,0],
 	}
 }
 
@@ -164,6 +170,37 @@ function initPointCloudLutPlan(plan) {
 	return {
 		positions: positions,
 		colors: colors,
+		frameCount: 1,
+		size: [0,0],
+	}
+}
+
+function initPointCloudLutOt(plan) {
+	var size = new Uint32Array(plan, 0, 2);
+	var pointCount = size[0] * size[1];
+	var body = plan.slice(8);
+	var frameCount = Math.floor(body.byteLength / (8 * 3 * pointCount));
+	var positionDoubles = new Float64Array(body);
+
+	var subsample = 10;
+	var reducedPointCount = Math.floor(pointCount / subsample);
+	var positions = new Float32Array(3 * reducedPointCount * frameCount);
+
+	for (var f = 0 ; f < frameCount ; ++f) {
+		for (var i = 0; i < reducedPointCount; ++i ) {
+			var sourceOffset = f * pointCount + subsample * i;
+			var destOffset = f * reducedPointCount + i;
+			for (var k = 0 ; k < 3 ; ++k) {
+				positions[3 * destOffset + k] = positionDoubles[3 * sourceOffset + k];
+			}
+		}
+	}
+
+	return {
+		positions: positions,
+		colors: positions.slice(),
+		frameCount: frameCount,
+		size: size,
 	}
 }
 
@@ -171,12 +208,16 @@ function initPointCloudLut(data, type) {
 	var geoData = {
 		positions: [],
 		colors: [],
+		frameCount: 1,
+		size: [0,0],
 	};
 
 	if (type == 'CUBE') {
 		geoData = initPointCloudLutCube(data);
 	} else if (type == 'PLAN') {
 		geoData = initPointCloudLutPlan(data);
+	} else if (type == 'OT') {
+		geoData = initPointCloudLutOt(data);
 	}
 
 	for (var i = 0 ; i < geoData.positions.length ; ++i) {
@@ -199,9 +240,22 @@ function initPointCloudLut(data, type) {
 	var geometry = new THREE.BufferGeometry();
 	geometry.setAttribute( 'position', new THREE.Float32BufferAttribute( geoData.positions, 3 ) );
 	geometry.setAttribute( 'color', new THREE.Float32BufferAttribute( geoData.colors, 3 ) );
+	if (geoData.frameCount > 1) {
+		geometry.setDrawRange(0, Math.floor(geoData.positions.length / geoData.frameCount / 3));
+	}
 	geometry.computeBoundingSphere();
 	var material = new THREE.PointsMaterial( { size: guiData.pointSize, vertexColors: true } );
-	return new THREE.Points( geometry, material );
+	return {
+		object: new THREE.Points( geometry, material ),
+		animation: function(frame) {
+			frame = frame / 10.0;
+			geometry.setDrawRange((frame % geoData.frameCount) * geometry.drawRange.count, geometry.drawRange.count);
+			geometry.computeBoundingSphere();
+			geometry.attributes.position.needsUpdate = true;
+		},
+		size: geoData.size,
+		colors: geoData.colors,
+	}
 }
 
 function initLineCloudLut(data, type) {
@@ -240,6 +294,8 @@ function initLineCloudLut(data, type) {
 }
 
 function rebuildScene(texture) {
+	animationCallbacks = [];
+
 	if (linesObject !== undefined) {
 		scene.remove(linesObject);
 	}
@@ -268,33 +324,74 @@ function rebuildScene(texture) {
 	}
 }
 
-function rebuildSceneLut(data, type) {	
-	{
-		scene.remove(lutInputGroup);
-		lutInputGroup = new THREE.Group();
-		scene.add(lutInputGroup);
-	}
+function rebuildSceneLut(data, type) {
+	animationCallbacks = [];
 
-	{
-		if (linesObject !== undefined) {
-			scene.remove(linesObject);
-		}
-		linesObject = initLineCloudLut(data, type);
-		scene.add( linesObject );
-	}
+	//
+	scene.remove(lutInputGroup);
+	lutInputGroup = new THREE.Group();
+	scene.add(lutInputGroup);
 
-	{
-		if (pointsObject !== undefined) {
-			scene.remove(pointsObject);
-		}
-		pointsObject = initPointCloudLut(data, type);
-		scene.add( pointsObject );
+	//
+	if (linesObject !== undefined) {
+		scene.remove(linesObject);
 	}
+	linesObject = initLineCloudLut(data, type);
+	scene.add( linesObject );
 
-	{
-		if (planeObject !== undefined) {
-			scene2.remove(planeObject);
+	//
+	if (pointsObject !== undefined) {
+		scene.remove(pointsObject);
+	}
+	var pc = initPointCloudLut(data, type);
+	pointsObject = pc.object;
+	animationCallbacks.push(pc.animation);
+	scene.add( pointsObject );
+
+	//
+	if (planeObject !== undefined) {
+		scene2.remove(planeObject);
+	}
+	if (type == 'OT') {
+		var canvas = document.createElement('canvas');
+		var W = pc.size[0];
+		var H = pc.size[1];
+		canvas.width = W;
+		canvas.height = H;
+		var ctx = canvas.getContext("2d");
+
+		var texture = new CanvasTexture(canvas);
+		var quad = new THREE.PlaneBufferGeometry( pc.size[0] / pc.size[1], 1.0 );
+		var material = new THREE.MeshBasicMaterial( { map: texture } );
+		planeObject = new THREE.Mesh(quad, material);
+		planeObject.position.x += 0.5;
+		planeObject.position.y += 0.5;
+		planeObject.scale.x *= 0.5;
+		planeObject.scale.y *= 0.5;
+		scene2.add( planeObject );
+
+		var size = new Uint32Array(data, 0, 2);
+		var W = size[0];
+		var H = size[1];
+		var pointCount = W * H;
+		var colorDoubles = new Float64Array(data, 8);
+		var frameCount = colorDoubles.length / (3 * pointCount);
+
+		var uint8data = new Uint8ClampedArray(4 * pointCount * frameCount);
+		for (var i = 0 ; i < frameCount * pointCount ; ++i) {
+			for (var k = 0 ; k < 3 ; ++k) {
+				uint8data[4 * i + k] = colorDoubles[3 * i + k] * 255;
+			}
+			uint8data[4 * i + 3] = 255;
 		}
+
+		animationCallbacks.push(function(frame) {
+			frame = Math.floor(frame / 10);
+			frame = frame % frameCount;
+			var slice = new Uint8ClampedArray(uint8data.buffer, 4 * pointCount * frame, 4 * pointCount);
+			ctx.putImageData(new ImageData(slice, W, H), 0, 0);
+			texture.needsUpdate = true;
+		});
 	}
 
 	lutData = data;
@@ -403,6 +500,16 @@ function init() {
 	controls.maxDistance = 500;
 
 	controls.maxPolarAngle = 4 * Math.PI / 6;
+	controls.addEventListener('start', function() {
+		previousCamera = null;
+		mayStopDrawing = false;
+		animate();
+	})
+	controls.addEventListener('end', function() {
+		if (guiData.autostopDrawing) {
+			mayStopDrawing = true;
+		}
+	})
 
 	// world
 
@@ -433,6 +540,7 @@ function init() {
 	gui.add(guiData, 'showAxis');
 	gui.add(guiData, 'showLutInput');
 	gui.add(guiData, 'sliderSympa', 0.0, 1.0);
+	gui.add(guiData, 'autostopDrawing');
 
 	//
 
@@ -456,6 +564,14 @@ Handlers.prototype.userFileChanged = function(userFile) {
 
 		reader.onload = function(e) {
 			rebuildSceneLut(e.target.result, 'PLAN');
+		}
+
+		reader.readAsArrayBuffer(filename);
+	} else if (filename.name.toLowerCase().endsWith(".ot")) {
+		var reader = new FileReader();
+
+		reader.onload = function(e) {
+			rebuildSceneLut(e.target.result, 'OT');
 		}
 
 		reader.readAsArrayBuffer(filename);
@@ -489,9 +605,24 @@ function onWindowResize() {
 	renderer.setSize( window.innerWidth, window.innerHeight );
 }
 
-function animate() {
+function matrixEquals(a, b, epsilon) {
+	var s = 0;
+	var n = a.elements.length;
+	var d;
+	for (var i = 0 ; i < n ; ++i) {
+		d = a.elements[i] - b.elements[i];
+		s += d * d;
+	}
+	return s < epsilon * epsilon;
+}
 
-	requestAnimationFrame( animate );
+var currentFrame = 0;
+function animate() {
+	if (mayStopDrawing && previousCamera != null && matrixEquals(previousCamera.matrixWorldInverse, camera.matrixWorldInverse, 1e-5)) {
+	} else {
+		requestAnimationFrame( animate );
+	}
+	previousCamera = camera.clone();
 
 	controls.update(); // only required if controls.enableDamping = true, or if controls.autoRotate = true
 
@@ -512,6 +643,11 @@ function animate() {
 
 	setLutSympa(guiData.sliderSympa);
 
+	for (var i = 0 ; i < animationCallbacks.length ; ++i) {
+		animationCallbacks[i](currentFrame);
+	}
+	++currentFrame;
+
 	render();
 
 }
@@ -521,5 +657,4 @@ function render() {
 	renderer.render( scene, camera );
 	renderer.autoClear = false;
 	renderer.render( scene2, camera2 );
-
 }
